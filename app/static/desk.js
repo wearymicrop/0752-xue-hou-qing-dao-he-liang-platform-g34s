@@ -64,10 +64,39 @@ function render() {
 function archiveView() {
   if (!state.run) return '<p class="empty">运行核量后查看凭证。</p><button data-history>查找历史</button><div id="history"></div>';
   const {id,manifest,signature} = state.run;
+  const amendment = manifest.amendment;
+  let signBlock;
+  if (signature) signBlock = `<p>已签收 · ${escape(signature.reviewer)}</p>`;
+  else if (amendment && !amendment.verified) signBlock = '<p class="empty">补扫未核清，不得签收；请先与线路登记核清后重新并入。</p>';
+  else signBlock = '<form class="archive-form" id="sign"><label>签收人 <input name="reviewer" required maxlength="100"></label><button>签收</button></form>';
   return `<p>${escape(manifest.batch)} · ${escape(manifest.generated_at)}</p><code class="digest">${escape(manifest.digest)}</code>
-  <div class="row-actions"><button data-rerun>重跑核量</button><a class="download" href="/api/runs/${encodeURIComponent(id)}/export">导出凭证</a><button data-history>查找历史</button></div>
-  ${signature ? `<p>已签收 · ${escape(signature.reviewer)}</p>` : '<form class="archive-form" id="sign"><label>签收人 <input name="reviewer" required maxlength="100"></label><button>签收</button></form>'}<div id="history"></div>`;
+  <div class="row-actions"><button data-rerun>重跑核量</button><button data-amend>并入补扫文件</button><button data-amend-sample>并入补扫样例</button><input id="amend-file" type="file" accept=".json,application/json" hidden><a class="download" href="/api/runs/${encodeURIComponent(id)}/export">导出凭证</a><button data-history>查找历史</button></div>
+  ${amendment ? amendmentView() : ''}
+  ${signBlock}<div id="history"></div>`;
 }
+
+function amendmentView() {
+  const delta = state.run.delta;
+  if (!delta) return '<p class="empty">正在读取交班差额…</p>';
+  const mark = value => value > 0 ? `+${value}` : `${value}`;
+  const fields = [['responsibility_m','责任'],['covered_m','有效覆盖'],['pending_m','待扫'],['unknown_m','证据不足'],['difference_m','差额']];
+  const laneRows = delta.lanes.map(row => [`${row.road} · ${row.name} ${direction(row)}`,
+    ...fields.map(([field]) => `${row.base[field]} → ${row.amended[field]}（${mark(row.delta[field])}）`)]);
+  const changeRows = delta.changes.map(row => [`${row.road} ${direction(row)}`, `${row.from_m}–${row.to_m} m`,
+    `${labels[row.from] ?? '无'} → ${labels[row.to] ?? '无'}`,
+    row.references.map(ref => `${ref.vehicle} · 轨迹${ref.line}–${ref.end_line} · 窗口${ref.window_lines.join('、') || '—'}`).join('；')]);
+  const used = Object.entries(delta.supplement.lines).map(([table,lines]) => `${names[table]}第${lines.join('、')}行`).join('；');
+  const issueRows = delta.issues.map(row => [names[row.table] ?? row.table, row.end_line ? `${row.line}–${row.end_line}` : row.line, row.code, row.detail]);
+  return `<h3>交班差额 · 相对已签收基线</h3>
+  <p>${delta.verified ? '补扫已核清，差额可签收。' : '补扫未核清，差额仅为草稿，不计入正式结论。'}基线由 ${escape(delta.base.reviewer ?? '—')} 签收 <button data-run="${escape(delta.base.id)}">打开基线凭证</button></p>
+  <p>补扫批次 ${escape(delta.supplement.batch)} · 采用原始行：${escape(used || '无')}</p>
+  <h3>里程变化（米）</h3>${table(['方向',...fields.map(([,label]) => label)],laneRows)}
+  <h3>区间变化与原始行</h3>${table(['方向','区间','变化','证据（车辆 · 轨迹行 · 窗口行）'],changeRows)}
+  ${issueRows.length ? `<h3>补扫引发的判定</h3>${table(['来源','行号','原因码','判定'],issueRows)}` : ''}`;
+}
+
+const amendMessage = run => run.reused ? '补扫未产生新运行，未重复叠加'
+  : run.manifest.amendment && run.manifest.amendment.verified ? '补扫已核清，差额待签收' : '补扫未核清，仅形成草稿差额';
 
 async function request(path, payload) {
   const response = await fetch(path, payload === undefined ? {} : {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -80,36 +109,52 @@ async function action(operation) {
   state.busy = true; showMessage('正在处理…');
   try {await operation();} catch (error) {showMessage(error.message,true);} finally {state.busy = false;}
 }
-function accept(run) {state.run = run; state.data = run.result; render();}
+async function accept(run) {
+  if (run.manifest && run.manifest.amendment && !run.delta) run.delta = await request(`/api/runs/${run.id}/delta`);
+  state.run = run; state.data = run.result; render();
+}
 function switchStage() {const stage = location.hash.slice(1); state.stage = headings[stage] ? stage : 'coverage'; render();}
 window.addEventListener('hashchange',switchStage);
 byId('lane').addEventListener('change',event=>{state.lane=event.target.value; state.part=0; render();});
 byId('sample').addEventListener('change',event=>{location.href=`/?sample=${event.target.value}${location.hash}`;});
 byId('toolbar').addEventListener('submit',event=>{event.preventDefault(); action(async()=>{
   const run = state.run ? await request(`/api/runs/${state.run.id}/rerun`,{}) : await request('/api/runs',{sample:byId('sample').value});
-  accept(run); showMessage(run.reused?'重跑一致':'核量已归档');
+  await accept(run); showMessage(run.reused?'重跑一致':'核量已归档');
 });});
 byId('import').addEventListener('click',()=>byId('file').click());
 byId('file').addEventListener('change',event=>{
   const [file] = event.target.files; if (!file) return;
   action(async()=>{let source;try{source=JSON.parse(await file.text());}catch{throw new Error('无法读取批次 JSON，请检查文件。');}
-    accept(await request('/api/runs',{source})); showMessage('导入已归档');
+    await accept(await request('/api/runs',{source})); showMessage('导入已归档');
   }).finally(()=>{event.target.value='';});
 });
 byId('scale').addEventListener('click',event=>{if(event.target.dataset.part===undefined)return; state.part=Number(event.target.dataset.part); location.hash='coverage'; render();});
 byId('stage-detail').addEventListener('click',event=>{
   const button=event.target.closest('button'); if(!button)return;
   if(button.dataset.part!==undefined){state.part=Number(button.dataset.part);render();return;}
-  if (!button.matches('[data-rerun],[data-history],[data-run]')) return;
+  if(button.hasAttribute('data-amend')){byId('amend-file').click();return;}
+  if (!button.matches('[data-rerun],[data-history],[data-run],[data-amend-sample]')) return;
   action(async()=>{
-    if(button.hasAttribute('data-rerun')){accept(await request(`/api/runs/${state.run.id}/rerun`,{}));showMessage('重跑一致');}
+    if(button.hasAttribute('data-rerun')){await accept(await request(`/api/runs/${state.run.id}/rerun`,{}));showMessage('重跑一致');}
+    if(button.hasAttribute('data-amend-sample')){
+      const run=await request(`/api/runs/${state.run.id}/amend`,{sample:'supplement'});
+      await accept(run); showMessage(amendMessage(run));
+    }
     if(button.hasAttribute('data-history')){
       const {runs}=await request('/api/runs');
       byId('history').replaceChildren(...runs.map(run=>{const item=document.createElement('button');item.dataset.run=run.id;item.textContent=run.batch;return item;}));
       showMessage(runs.length?`${runs.length} 笔运行`:'暂无归档');
     }
-    if(button.dataset.run){accept(await request(`/api/runs/${button.dataset.run}`));showMessage('已打开凭证');}
+    if(button.dataset.run){await accept(await request(`/api/runs/${button.dataset.run}`));showMessage('已打开凭证');}
   });
+});
+byId('stage-detail').addEventListener('change',event=>{
+  if(event.target.id!=='amend-file')return;
+  const [file]=event.target.files; if(!file)return;
+  action(async()=>{let source;try{source=JSON.parse(await file.text());}catch{throw new Error('无法读取批次 JSON，请检查文件。');}
+    const run=await request(`/api/runs/${state.run.id}/amend`,{source});
+    await accept(run); showMessage(amendMessage(run));
+  }).finally(()=>{event.target.value='';});
 });
 byId('stage-detail').addEventListener('submit',event=>{
   if(event.target.id!=='sign')return; event.preventDefault();

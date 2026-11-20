@@ -6,7 +6,7 @@ TITLE = "雪后清道核量台"
 PROJECT = "gb-0752"
 RULESET = "gb-0752/1.0"
 SIGNATURE_TITLE = "工单凭证"
-SAMPLES = {"dirty": "现场样例", "clean": "干净样例"}
+SAMPLES = {"dirty": "现场样例", "clean": "干净样例", "supplement": "补扫样例"}
 MAX_ROWS = 2500
 
 

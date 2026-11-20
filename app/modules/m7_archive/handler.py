@@ -22,6 +22,16 @@ def read(ident: str, request: Request):
     return request.app.state.ledger.read(ident)[1]
 
 
+@router.post("/{ident}/amend")
+def amend(ident: str, body: dict, request: Request):
+    return service.amend(request.app.state.ledger, ident, choose(body))
+
+
+@router.get("/{ident}/delta")
+def delta(ident: str, request: Request):
+    return service.delta(request.app.state.ledger, ident)
+
+
 @router.post("/{ident}/rerun")
 def rerun(ident: str, request: Request):
     return service.rerun(request.app.state.ledger, ident)

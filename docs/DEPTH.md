@@ -14,7 +14,7 @@
 | M4 清扫窗口 | 查看按时段、方向及铲位采信的轨迹段 | `GET /api/windows/{sample}` | `app/modules/m4_windows/service.py` | `tests/test_windows.py` |
 | M5 覆盖合并 | 展开覆盖、待扫及缺证区间的证据 | `GET /api/coverage/{sample}` | `app/modules/m5_coverage/sweep.py` | `tests/test_coverage.py` |
 | M6 缺扫对账 | 查逐方向差额及全部判定记录 | `GET /api/reconcile/{sample}` | `app/modules/m6_reconcile/ledger.py` | `tests/test_reconcile.py` |
-| M7 工单凭证 | 重算、签收并下载冻结证据 | `POST /api/runs` | `app/modules/m7_archive/service.py` | `tests/test_archive.py` |
+| M7 工单凭证 | 重算、签收、下载冻结证据，并以已签收凭证为基线并入补扫、查看交班差额 | `POST /api/runs`、`POST /api/runs/{id}/amend` | `app/modules/m7_archive/service.py`、`app/modules/m7_archive/delta.py` | `tests/test_archive.py`、`tests/test_amend.py` |
 
 ## 陷阱登记
 
@@ -31,3 +31,5 @@
 | TRAP-23 | 临界时刻恰好接触窗口 | 增加虚假交集 | 半开窗口边界 | `app/modules/m4_windows/intervals.py` | `tests/test_windows.py::test_half_open_contact_has_no_distance` |
 | TRAP-25 | 脏样例两作业窗口重叠 | 同段两次采信 | 时间窗口归并 | `app/modules/m4_windows/service.py` | `tests/test_windows.py::test_windows_unioned_without_doubling` |
 | TRAP-26 | 签收提交带陈旧摘要 | 签错快照 | 返回冲突 | `app/modules/m7_archive/service.py` | `tests/test_archive.py::test_signature_requires_current_digest` |
+| TRAP-27 | 同一补扫重跑或断点续跑 | 覆盖重复叠加 | 补扫行按内容去重合并，运行按内容寻址，覆盖保持区间并集 | `app/modules/m7_archive/delta.py` | `tests/test_amend.py::test_amend_resume_and_retransmission_never_double_count` |
+| TRAP-28 | 补扫定位或窗口未与线路登记核清 | 未核清里程混入正式差额 | 相对基线有新判定即拒签，差额仅作草稿 | `app/modules/m7_archive/service.py` | `tests/test_amend.py::test_unverified_supplement_stays_draft` |
